@@ -35,6 +35,17 @@
 // nothing per TVL dollar — so the giant allocators (Veda, Upshift) rank far below their TVL rank,
 // while Risk Curators (one live comp, shrunk to 0.32x) top the board on scale. That is the data
 // speaking, and the dashboard shows the whole multiples table with each category's comp count.
+//
+// THE PLAUSIBLE RANGE
+// The headline number leans on the category multiple, and for a thin category that multiple is
+// mostly the global median wearing the category's name. So every row also carries the value it
+// would get at the two ends of the calibration: the global median on one side and the category's
+// raw median on the other, both run through the same growth, maturity and chain terms. A narrow
+// band means the rank stands on the protocol's own record; a wide band means it stands on the
+// calibration, and the dashboard shows the band beside the headline so the reader can see which.
+// The band is a re-scaling of the headline, not a second model: the headline times the global
+// median over the category multiple, and the headline times the raw median over the category
+// multiple, each clamped to the multiples the shipped model allows.
 
 /** The snapshot's protocol entry: exactly the ten fields the sealed input carries. */
 export interface SnapshotProtocol {
@@ -136,6 +147,11 @@ export interface BoardRow {
   on_watchlist: boolean;
   age_days: number | null;
   implied_value_usd: number;
+  value_range_usd: {
+    low_usd: number;
+    high_usd: number;
+    band_ratio: number;
+  };
   model: {
     category_multiple: number;
     growth_pct: number;
@@ -161,6 +177,10 @@ export interface RadarRow {
   age_days: number | null;
   on_watchlist: boolean;
   implied_value_usd: number;
+  value_low_usd: number;
+  value_high_usd: number;
+  value_band_ratio: number;
+  value_band_label: string;
   category_multiple: number;
   growth_multiplier: number;
   maturity_multiplier: number;
@@ -192,6 +212,8 @@ export interface RadarData {
   board_implied_total_usd: number;
   watchlist_implied_total_usd: number;
   top10_implied_total_usd: number;
+  wide_band_rows: number;
+  very_wide_band_rows: number;
   calibration: Calibration;
   rows: RadarRow[];
   live: LiveRow[];
@@ -276,7 +298,7 @@ export function impliedValue(
   asOf: string,
   model: ModelConstants,
   calibration: Calibration,
-): { implied: number; categoryMultiple: number; growthPct: number; growthMult: number; maturityMult: number; chainMult: number; age: number | null } {
+): { implied: number; low: number; high: number; categoryMultiple: number; growthPct: number; growthMult: number; maturityMult: number; chainMult: number; age: number | null } {
   const age = ageDays(asOf, protocol.listed_at);
   const rawGrowth = finite(protocol.change_7d, 0);
   const growthPct = Math.min(model.growth_cap, Math.max(model.growth_floor, rawGrowth));
@@ -286,7 +308,29 @@ export function impliedValue(
   const chainMult = 1 + model.chain_step * Math.min(Math.max(protocol.chains.length - 1, 0), model.chain_cap);
   const categoryMultiple = categoryMultipleFor(protocol, calibration);
   const implied = Math.max(1, Math.round(protocol.tvl_usd * categoryMultiple * growthMult * maturityMult * chainMult));
-  return { implied, categoryMultiple, growthPct, growthMult, maturityMult, chainMult, age };
+  // The band's ends: the headline re-scaled to the two ends of the calibration, the global
+  // median on one side and the category's raw median on the other, each clamped to the
+  // multiples the shipped model allows. The shrunk multiple sits between the two, so the
+  // headline always lands inside its own band.
+  let rawMultiple = calibration.global_median;
+  for (const entry of calibration.by_category) {
+    if (entry.category === (protocol.category ?? 'Other') && entry.raw_median !== null) rawMultiple = entry.raw_median;
+  }
+  const bandMultiple = Math.min(model.multiple_cap, Math.max(model.multiple_floor, rawMultiple));
+  const atGlobal = Math.max(1, Math.round((implied * calibration.global_median) / categoryMultiple));
+  const atRaw = Math.max(1, Math.round((implied * bandMultiple) / categoryMultiple));
+  const low = Math.min(atGlobal, atRaw);
+  const high = Math.max(atGlobal, atRaw);
+  return { implied, low, high, categoryMultiple, growthPct, growthMult, maturityMult, chainMult, age };
+}
+
+// A band's width, in words, so the dashboard can label every row with it and a reader can tell at
+// a glance whether the headline stands on the protocol or on the calibration. Fourfold or more
+// means the two ends of the calibration disagree so much that the headline is mostly a guess.
+export function bandLabel(bandRatio: number): 'narrow' | 'wide' | 'very wide' {
+  if (bandRatio >= 4) return 'very wide';
+  if (bandRatio >= 2) return 'wide';
+  return 'narrow';
 }
 
 /** DefiLlama's version-marker rule: a name ending in a release is a pool of another protocol. */
@@ -358,6 +402,7 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
     on_watchlist: watchlist.has(s.p.slug),
     age_days: s.age,
     implied_value_usd: s.implied,
+    value_range_usd: { low_usd: s.low, high_usd: s.high, band_ratio: Math.round((s.high / s.low) * 100) / 100 },
     model: {
       category_multiple: round4(s.categoryMultiple),
       growth_pct: s.growthPct,
@@ -516,6 +561,10 @@ export function radarRow(row: BoardRow): RadarRow {
     age_days: row.age_days,
     on_watchlist: row.on_watchlist,
     implied_value_usd: row.implied_value_usd,
+    value_low_usd: row.value_range_usd.low_usd,
+    value_high_usd: row.value_range_usd.high_usd,
+    value_band_ratio: row.value_range_usd.band_ratio,
+    value_band_label: bandLabel(row.value_range_usd.band_ratio),
     category_multiple: row.model.category_multiple,
     growth_multiplier: row.model.growth_multiplier,
     maturity_multiplier: row.model.maturity_multiplier,
@@ -533,6 +582,8 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
   const boardTotal = board.reduce((n, r) => n + r.implied_value_usd, 0);
   const watchlistTotal = board.filter((r) => watchlist.has(r.slug)).reduce((n, r) => n + r.implied_value_usd, 0);
   const top10Total = board.slice(0, 10).reduce((n, r) => n + r.implied_value_usd, 0);
+  const wideBand = board.filter((r) => r.value_range_usd.high_usd >= 2 * r.value_range_usd.low_usd).length;
+  const veryWideBand = board.filter((r) => r.value_range_usd.band_ratio >= 4).length;
   const radar: RadarData = {
     as_of: snapshot.as_of,
     source: snapshot.source,
@@ -546,6 +597,8 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
     board_implied_total_usd: boardTotal,
     watchlist_implied_total_usd: watchlistTotal,
     top10_implied_total_usd: top10Total,
+    wide_band_rows: wideBand,
+    very_wide_band_rows: veryWideBand,
     calibration,
     rows: board.map(radarRow),
     live,

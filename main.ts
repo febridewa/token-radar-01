@@ -88,5 +88,7 @@ writeFileSync(join(out, 'dossier.json'), buildDossier(out, { text_max_bytes: TEX
 process.stdout.write(
   `token radar: ${snapshot.protocols.length} protocols, ${snapshot.watchlist.length} on the watchlist, ${board.length} rows scored (${radar.early_size} early, ${radar.live_size} live set aside)\n` +
     `token radar: model ${radar.model_version}, global median mcap/TVL ${radar.calibration.global_median} from ${radar.calibration.live_comps} live comps, board implied value $${radar.board_implied_total_usd.toLocaleString('en-US')}\n` +
+    `token radar: plausible range spans 2x or more for ${radar.wide_band_rows} of ${board.length} rows: for those, the category multiple decides the rank more than the TVL does\n` +
+    `token radar: ${radar.very_wide_band_rows} rows are very wide (4x or more): for those the headline is mostly calibration, not protocol\n` +
     `token radar: wrote ${join(out, 'board.json')}, ${join(out, 'data.js')}, ${join(out, 'dashboard')} (3 files), ${join(out, 'screenshots')} (${shots.length} images) and ${join(out, 'dossier.json')}\n`,
 );

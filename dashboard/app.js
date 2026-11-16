@@ -8,7 +8,7 @@
   var DATA = window.RADAR;
   if (!DATA) return;
   var app = document.getElementById('board');
-  var state = { q: '', category: 'all', chain: 'all', watchlistOnly: false, tab: 'pre-token', sort: 'implied', dir: -1, selected: null, sandbox: null };
+  var state = { q: '', category: 'all', chain: 'all', watchlistOnly: false, wideOnly: false, tab: 'pre-token', sort: 'implied', dir: -1, selected: null, sandbox: null };
 
   var usd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
   function fmtUsd(n) {
@@ -138,6 +138,7 @@
     var params = new URLSearchParams(hash);
     if (params.get('q')) state.q = params.get('q');
     if (params.get('p')) state.selected = params.get('p');
+    if (params.get('wide')) state.wideOnly = params.get('wide') === '1';
     if (params.get('category')) state.category = params.get('category');
     if (params.get('chain')) state.chain = params.get('chain');
     if (params.get('wl')) state.watchlistOnly = params.get('wl') === '1';
@@ -151,6 +152,7 @@
     if (state.watchlistOnly) params.set('wl', '1');
     if (state.tab !== 'pre-token') params.set('tab', state.tab);
     if (state.selected) params.set('p', state.selected);
+    if (state.wideOnly) params.set('wide', '1');
     var next = params.toString();
     if (next) window.history.replaceState(null, '', '#' + next);
     else window.history.replaceState(null, '', window.location.pathname + window.location.search);
@@ -162,6 +164,7 @@
       if (state.category !== 'all' && r.category !== state.category) return false;
       if (state.chain !== 'all' && !(r.chains || []).includes(state.chain)) return false;
       if (state.watchlistOnly && !r.on_watchlist) return false;
+      if (state.wideOnly && r.value_band_ratio < 2) return false;
       if (!q) return true;
       var hay = [r.name, r.slug, r.category, (r.chains || []).join(' ')].join(' ').toLowerCase();
       return hay.indexOf(q) >= 0;
@@ -175,6 +178,7 @@
       else if (key === 'tvl') { av = a.tvl_usd; bv = b.tvl_usd; }
       else if (key === 'growth') { av = a.change_7d === null ? -Infinity : a.change_7d; bv = b.change_7d === null ? -Infinity : b.change_7d; }
       else if (key === 'age') { av = a.age_days === null ? Infinity : a.age_days; bv = b.age_days === null ? Infinity : b.age_days; }
+      else if (key === 'range') { av = a.value_band_ratio; bv = b.value_band_ratio; }
       else { av = shownValue(a); bv = shownValue(b); }
       if (av < bv) return -state.dir;
       if (av > bv) return state.dir;
@@ -212,7 +216,8 @@
         el('div', { class: 'fact' }, el('span', { text: 'Launch candidates scored' }), el('b', { text: String(DATA.board_size) })),
         el('div', { class: 'fact' }, el('span', { text: 'Board implied value' }), el('b', { text: fmtUsd(DATA.board_implied_total_usd) })),
         el('div', { class: 'fact' }, el('span', { text: 'Global median mcap / TVL' }), el('b', { text: fmtMult(DATA.calibration.global_median) + ' (' + DATA.calibration.live_comps + ' live comps)' })),
-        el('div', { class: 'fact' }, el('span', { text: 'Live-token protocols set aside' }), el('b', { text: String(DATA.live_size) }))
+        el('div', { class: 'fact' }, el('span', { text: 'Live-token protocols set aside' }), el('b', { text: String(DATA.live_size) })),
+        el('div', { class: 'fact' }, el('span', { text: 'Very wide bands (4x or more)' }), el('b', { text: String(DATA.very_wide_band_rows) }))
       )
     );
   }
@@ -237,6 +242,11 @@
       'Watchlist only'
     );
     wl.querySelector('input').addEventListener('change', function (e) { state.watchlistOnly = e.target.checked; writeHash(); render(); });
+    var wide = el('label', { class: 'check' },
+      el('input', { type: 'checkbox', checked: state.wideOnly ? 'checked' : null, 'aria-label': 'Wide bands only' }),
+      'Wide bands only'
+    );
+    wide.querySelector('input').addEventListener('change', function (e) { state.wideOnly = e.target.checked; writeHash(); render(); });
     function tabBtn(tab, label) {
       return el('button', { type: 'button', 'aria-pressed': state.tab === tab ? 'true' : 'false', text: label, onclick: function () { state.tab = tab; writeHash(); render(); } });
     }
@@ -245,7 +255,7 @@
       el('div', { class: 'field' }, el('label', { for: 'q', text: 'Search' }), search),
       el('div', { class: 'field' }, el('label', { for: 'category', text: 'Category' }), select),
       el('div', { class: 'field' }, el('label', { for: 'chain', text: 'Chain' }), chainSel),
-      el('div', { class: 'field' }, el('span', { class: 'sub', text: 'Scope' }), wl),
+      el('div', { class: 'field' }, el('span', { class: 'sub', text: 'Scope' }), wl, wide),
       el('div', { class: 'field' }, el('span', { class: 'sub', text: 'View' }), el('div', { class: 'tabs' }, tabBtn('pre-token', 'Pre-token'), tabBtn('live', 'Live token'), tabBtn('model', 'Model'))),
       el('span', { class: 'count', text: countText })
     );
@@ -295,6 +305,7 @@
           el('div', { class: 'bar', 'aria-hidden': 'true' }, el('i', { style: 'width:' + Math.max(3, Math.round((shownValue(r) / max) * 100)) + '%' })),
           el('span', { class: 'num', text: fmtUsd(shownValue(r)) })
         )),
+        el('td', { class: 'num band-' + r.value_band_label.replace(' ', '-'), text: fmtUsd(r.value_low_usd) + ' – ' + fmtUsd(r.value_high_usd) + ' · ' + r.value_band_label }),
         el('td', null, el('span', { class: 'status', text: 'no token' }))
       );
       tbody.appendChild(tr);
@@ -311,6 +322,7 @@
             sortHeader('growth', '7d'),
             sortHeader('age', 'Age'),
             sortHeader('implied', 'Implied value'),
+            sortHeader('range', 'Range'),
             el('th', { scope: 'col', text: 'Token' })
           )),
           tbody
@@ -375,7 +387,9 @@
         el('div', { class: 'formula' },
           'implied = round( tvl_usd x category_multiple x (1 + clamp(change_7d, ' + m.growth_floor + ', ' + m.growth_cap + ') / 100 x ' + m.growth_weight + ') x (' + m.maturity_floor + ' + min(age_days, ' + m.maturity_days + ') / ' + m.maturity_days + ' x ' + m.maturity_range + ') x (1 + ' + m.chain_step + ' x min(chains - 1, ' + m.chain_cap + ')) )'
         ),
-        el('p', { class: 'sub', text: 'TVL and seven-day growth come from the snapshot. Age is the time since the protocol was first listed, the best record of how long it has run with no token; an unlisted age uses ' + m.unknown_age_days + ' days. The category multiple is calibrated from the ' + cal.live_comps + ' live-token protocols in this snapshot (table below), shrunk toward the global median of ' + fmtMult(cal.global_median) + ' so thin categories stay honest. The early radar is every pre-token protocol below the watchlist floor that passes the house rule, and the live-token protocols are set aside with their market caps shown.' })
+        el('p', { class: 'sub', text: 'TVL and seven-day growth come from the snapshot. Age is the time since the protocol was first listed, the best record of how long it has run with no token; an unlisted age uses ' + m.unknown_age_days + ' days. The category multiple is calibrated from the ' + cal.live_comps + ' live-token protocols in this snapshot (table below), shrunk toward the global median of ' + fmtMult(cal.global_median) + ' so thin categories stay honest. The early radar is every pre-token protocol below the watchlist floor that passes the house rule, and the live-token protocols are set aside with their market caps shown.' }),
+        el('p', { class: 'sub', text: 'The plausible range on every row re-scores it at the global median and at the raw category median, so a wide range is a warning that the rank leans on the calibration. Sort the board by Range to find the rows whose headline depends on it most.' }),
+        el('p', { class: 'sub', text: 'Labels on the board say how far each band stretches: ' + DATA.wide_band_rows + ' rows are wide (2x or more) and ' + DATA.very_wide_band_rows + ' of those are very wide (4x or more), where the headline is mostly calibration.' })
       ),
       el('section', { class: 'panel model' },
         el('h2', { text: 'Model sandbox — change the weights, watch the board move' }),
@@ -430,9 +444,11 @@
         el('div', null, el('span', { text: 'Growth multiplier' }), el('b', { class: 'num', text: String(row.growth_multiplier) })),
         el('div', null, el('span', { text: 'Maturity multiplier' }), el('b', { class: 'num', text: String(row.maturity_multiplier) })),
         el('div', null, el('span', { text: 'Chain multiplier (' + (row.chains ? row.chains.length : 0) + ' chains)' }), el('b', { class: 'num', text: String(row.chain_multiplier) })),
-        el('div', null, el('span', { text: 'Implied value' }), el('b', { class: 'num', text: fmtUsd(row.implied_value_usd) }))
+        el('div', null, el('span', { text: 'Implied value' }), el('b', { class: 'num', text: fmtUsd(row.implied_value_usd) })),
+        el('div', { class: 'band' }, el('span', { text: 'Plausible range' }), el('b', { class: 'num', text: fmtUsd(row.value_low_usd) + ' – ' + fmtUsd(row.value_high_usd) })),
+        el('div', { class: 'band' }, el('span', { text: 'Band width' }), el('b', { class: 'num', text: row.value_band_label + ' at ' + row.value_band_ratio + 'x' }))
       ),
-      el('p', { class: 'sub', text: 'Model ' + DATA.model_version + ': the same function scores every protocol. The page recomputes this row as ' + fmtUsd(recomputed) + (recomputed === row.implied_value_usd ? ', the same number board.json carries.' : ', which differs from the board: the data would be stale.') + ' This is an estimate, not a price. The protocol records no token in this snapshot — that is not proof it has none.' })
+      el('p', { class: 'sub', text: 'Model ' + DATA.model_version + ': the same function scores every protocol. The page recomputes this row as ' + fmtUsd(recomputed) + (recomputed === row.implied_value_usd ? ', the same number board.json carries.' : ', which differs from the board: the data would be stale.') + ' This is an estimate, not a price. The protocol records no token in this snapshot — that is not proof it has none. The plausible range re-scores the row at the global median and at the raw category median: a narrow range means the rank stands on the protocol, a wide one means it leans on the calibration.' })
     ));
     dialog.appendChild(el('section', { class: 'detail-section' },
       el('h3', { text: 'Farm plan' }),
