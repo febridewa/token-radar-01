@@ -1,4 +1,4 @@
-// The token radar's model, radar-2: one snapshot of the protocol universe in, one ranked board out.
+// The token radar's model, radar-3: one snapshot of the protocol universe in, one ranked board out.
 //
 // WHAT THE BOARD IS
 // The board ranks every launch candidate the snapshot can name: a protocol that records no token
@@ -10,42 +10,48 @@
 // the board re-derives candidacy from the ten fields it does carry and says so per row.
 //
 // IMPLIED VALUE, FROM THE SNAPSHOT'S OWN FIGURES ONLY
-//   implied = tvl_usd x category_multiple x growth_mult x maturity_mult x chain_mult
-// The category multiple is calibrated, not chosen: for every category, the median market-cap / TVL
-// of the live-token protocols in that category in this same snapshot (ratios winsorised to
-// [0.005, 5]), shrunk in log space toward the global median with weight n / (n + 4), so a category
-// with one live comp barely moves off the global median, and capped to [0.02, 1.25]. A category
-// with no live comp at all takes the global median. No protocol name is ever special-cased: the
-// same function scores every row, and the dashboard recomputes every row from the same inputs.
+//   implied = 10 ^ (3.382 + 0.472 x log10(tvl_usd)) x category_factor x growth_mult x maturity_mult x chain_mult
+// The size curve is fitted, not chosen: least squares on log10(market cap) against log10(TVL)
+// over the 119 live-token protocols in this same snapshot (exchanges excluded, zero market caps
+// excluded — a zero has no logarithm). A slope of 0.472 says value grows slower than TVL, so a
+// $2B protocol is worth far less per TVL dollar than a $200M one. Each category then gets an
+// offset — the shrunk median of its live comps' residuals from the curve, weight n / (n + 4) —
+// so Prediction Market trades rich for its size and Liquid Staking trades cheap. No protocol
+// name is ever special-cased: the same function scores every row, and the dashboard recomputes
+// every row from the same inputs.
 //
 //   growth_mult   = 1 + clamp(change_7d, -50, 150) / 100 x 0.45   (null growth counts as 0)
 //   maturity_mult = 0.65 + 0.35 x min(age_days, 1095) / 1095      (unknown age counts as 365 days)
 //   chain_mult    = 1 + 0.015 x min(chains - 1, 6)
 //
-// Why each term: TVL is the protocol's scale; the category multiple is what the market already
-// pays per dollar of TVL for that kind of protocol; seven-day growth is momentum; age with no
-// token is durability (a protocol that has run for years without issuing one has a record worth
-// more than a week-old pool); chain count is reach (more chains, more surface to farm and more
-// users to convert). The model is a claim about value if the record stayed as it is — it does not
-// predict whether or when any token is issued, and "records no token" is never "has no token".
+// Why each term: TVL is the protocol's scale, read through the curve the market itself draws;
+// the category offset is what that kind of protocol trades at for its size; seven-day growth is
+// momentum; age with no token is durability; chain count is reach. The model is a claim about
+// value if the record stayed as it is — it does not predict whether or when any token is issued,
+// and "records no token" is never "has no token".
 //
-// WHAT THE CALIBRATION FINDS (snapshot 2026-11-14, 133 live-token comps after excluding CEX)
-// The global median market-cap / TVL is 0.19x. Categories differ by an order of magnitude: Dexs
-// 0.29x and RWA 0.24x pay up, Liquid Staking 0.05x and Onchain Capital Allocator 0.04x pay almost
-// nothing per TVL dollar — so the giant allocators (Veda, Upshift) rank far below their TVL rank,
-// while Risk Curators (one live comp, shrunk to 0.32x) top the board on scale. That is the data
-// speaking, and the dashboard shows the whole multiples table with each category's comp count.
+// THE BLIND TEST (snapshot 2026-11-14, 119 live-token comps)
+// The curve is tested blind, twice, against one flat median multiple. Leave-one-out: each live
+// comp held out in turn, the curve refitted without it — median miss x3.52 against x4.94 flat,
+// 46% within 3x of the real cap against 34% flat, 78% within 10x against 75%. Time split: fitted
+// only on the 39 comps listed before 2024, tested on the 48 listed since — median miss x2.32
+// against x4.89 flat, 54% within 3x against 35%. The curve earns its keep on launches it never
+// saw. The dashboard shows the whole test, the curve's scatter and the offsets table.
 //
 // THE PLAUSIBLE RANGE
-// The headline number leans on the category multiple, and for a thin category that multiple is
-// mostly the global median wearing the category's name. So every row also carries the value it
-// would get at the two ends of the calibration: the global median on one side and the category's
-// raw median on the other, both run through the same growth, maturity and chain terms. A narrow
-// band means the rank stands on the protocol's own record; a wide band means it stands on the
-// calibration, and the dashboard shows the band beside the headline so the reader can see which.
-// The band is a re-scaling of the headline, not a second model: the headline times the global
-// median over the category multiple, and the headline times the raw median over the category
-// multiple, each clamped to the multiples the shipped model allows.
+// The headline is one refit of the curve. So every row also carries the range its own value
+// takes across 100 bootstrap refits — the live comps resampled with replacement, the curve and
+// the offsets refitted, the row re-scored — 10th to 90th percentile, and the same percentiles
+// of its rank. A narrow band means the rank survives the resampling; a wide band means the
+// calibration decides it, and the dashboard shows the band beside the headline so the reader
+// can see which.
+//
+// FARM ECONOMICS, NETTED TO THE DOLLAR
+// Every row is netted at a $1,000 position: the slice is 10% of the implied value to depositors,
+// pro rata, minus the plan's own gas and the 4% a year forgone on the $1,000 for the hold.
+// FARM pays the fees and the yield, THIN beats the fees only, SKIP is eaten by the fees. At
+// $1,000 the board splits 99 FARM / 19 THIN / 80 SKIP — the giants' slices are thin because
+// the slice is a share of TVL, and a $2B TVL dilutes any deposit.
 
 /** The snapshot's protocol entry: exactly the ten fields the sealed input carries. */
 export interface SnapshotProtocol {
@@ -106,21 +112,56 @@ export const MODEL: ModelConstants = {
 };
 
 /** The model's version label: the dashboard names it and the rules quote it. */
-export const MODEL_VERSION = 'radar-2';
+export const MODEL_VERSION = 'radar-3';
 
-/** One category's calibrated multiple, with the evidence behind it. */
-export interface CategoryMultiple {
-  category: string;
+/** The size curve: log10(market cap) = intercept + slope x log10(TVL), fitted by least squares over the live-token comps. A slope under 1 says a token's value grows slower than its protocol's TVL: giants are worth less per TVL dollar than minnows, which a flat multiple cannot say. */
+export interface SizeCurve {
+  intercept: number;
+  slope: number;
   comps: number;
-  raw_median: number | null;
-  multiple: number;
 }
 
-/** The calibration: the global median and one multiple per category that has a live comp. */
-export interface Calibration {
-  global_median: number;
-  live_comps: number;
-  by_category: CategoryMultiple[];
+/** One category's offset from the curve, in log10: the shrunk median residual of its live comps. A factor above 1 says the category's tokens trade rich for their size; below 1 says they trade cheap. */
+export interface CategoryOffset {
+  category: string;
+  comps: number;
+  offset_log10: number;
+  factor: number;
+}
+
+/** One blind test of the curve: the model fitted without the answers, then scored on them. */
+export interface BacktestSplit {
+  name: string;
+  train_n: number;
+  test_n: number;
+  curve_miss: number;
+  flat_miss: number;
+  curve_within3: number;
+  flat_within3: number;
+  curve_within10: number;
+  flat_within10: number;
+}
+
+/** The whole blind test: leave-one-out over every live comp, plus a time split that fits only the protocols listed before 2024 and tests the newer ones. The flat baseline in both is one global median mcap / TVL for every protocol. */
+export interface BacktestReport {
+  loo: BacktestSplit;
+  time_split: BacktestSplit;
+  loo_p80_miss: number;
+  live_with_listed_at: number;
+}
+
+/** What a $1,000 farm position nets, in dollars, under stated assumptions: 10% of the launch goes to depositors pro rata, gas is the plan's own schedule, and the forgone yield is 4% a year on the $1,000 for the hold. */
+export interface FarmEconomics {
+  capital_usd: number;
+  slice_usd: number;
+  fees_usd: number;
+  forgone_usd: number;
+  net_usd: number;
+  hold_days: number;
+  weeks: number;
+  hours: number;
+  net_per_hour_usd: number;
+  verdict: 'FARM' | 'THIN' | 'SKIP';
 }
 
 /** A farm step: the action, what it costs, and how long it takes. */
@@ -153,13 +194,16 @@ export interface BoardRow {
     band_ratio: number;
   };
   model: {
-    category_multiple: number;
+    category_factor: number;
     growth_pct: number;
     growth_multiplier: number;
     maturity_multiplier: number;
     chain_multiplier: number;
     age_days: number | null;
   };
+  economics: FarmEconomics;
+  rank_low: number;
+  rank_high: number;
   farm_steps: string[];
 }
 
@@ -181,10 +225,17 @@ export interface RadarRow {
   value_high_usd: number;
   value_band_ratio: number;
   value_band_label: string;
-  category_multiple: number;
+  category_factor: number;
   growth_multiplier: number;
   maturity_multiplier: number;
   chain_multiplier: number;
+  verdict: 'FARM' | 'THIN' | 'SKIP';
+  slice_usd: number;
+  fees_usd: number;
+  net_usd: number;
+  net_per_hour_usd: number;
+  rank_low: number;
+  rank_high: number;
 }
 
 /** A live-token protocol: it already trades, so the board shows the market's own value, not a model's. */
@@ -198,7 +249,7 @@ export interface LiveRow {
   change_7d: number | null;
 }
 
-/** Everything the dashboard needs: the board, the live set, the calibration and the model. */
+/** Everything the dashboard needs: the board, the live set, the curve, the blind test and the model. */
 export interface RadarData {
   as_of: string;
   source: string;
@@ -214,7 +265,12 @@ export interface RadarData {
   top10_implied_total_usd: number;
   wide_band_rows: number;
   very_wide_band_rows: number;
-  calibration: Calibration;
+  curve: SizeCurve;
+  offsets: CategoryOffset[];
+  backtest: BacktestReport;
+  verdict_counts: { farm: number; thin: number; skip: number };
+  best_per_hour: { slug: string; name: string; net_usd: number; net_per_hour_usd: number }[];
+  comps: { slug: string; name: string; category: string | null; tvl_usd: number; mcap_usd: number }[];
   rows: RadarRow[];
   live: LiveRow[];
 }
@@ -250,55 +306,194 @@ export function ageDays(asOf: string, listedAt: string | null): number | null {
   return Math.max(0, Math.floor((a - b) / DAY_MS));
 }
 
+/** The live-token comps the curve is fitted on: a market cap and a TVL, both positive, and not an exchange. An exchange's market cap is not a per-TVL price for a protocol's token, and a zero market cap has no logarithm. */
+export function liveComps(snapshot: Snapshot): SnapshotProtocol[] {
+  return snapshot.protocols.filter((p) => p.mcap_usd !== null && p.mcap_usd > 0 && p.tvl_usd > 0 && p.category !== 'CEX');
+}
+
 /**
- * Calibrate the category multiples from the snapshot's own live-token protocols: for each
- * category, the median market-cap / TVL of its live protocols, winsorised, then shrunk in log
- * space toward the global median with weight n / (n + shrink_prior) and capped. Categories with
- * no live comp take the global median. CEX protocols are excluded: an exchange's market cap is
- * not a per-TVL price for a protocol's token.
+ * Fit the size curve by least squares on log10(market cap) against log10(TVL): the line
+ * through the live comps. A slope below 1 is the data saying value grows slower than TVL,
+ * so the curve, unlike a flat multiple, does not hand the biggest TVL the biggest value
+ * on size alone.
  */
-export function calibrateMultiples(snapshot: Snapshot, model: ModelConstants = MODEL): Calibration {
-  const ratiosByCategory = new Map<string, number[]>();
-  const allRatios: number[] = [];
-  for (const p of snapshot.protocols) {
-    if (p.mcap_usd === null || p.tvl_usd <= 0 || p.category === 'CEX') continue;
-    const ratio = Math.min(model.winsor_high, Math.max(model.winsor_low, p.mcap_usd / p.tvl_usd));
-    allRatios.push(ratio);
-    const key = p.category ?? 'Other';
-    const list = ratiosByCategory.get(key) ?? [];
-    list.push(ratio);
-    ratiosByCategory.set(key, list);
+export function fitSizeCurve(comps: SnapshotProtocol[]): SizeCurve {
+  const xs = comps.map((p) => Math.log10(p.tvl_usd));
+  const ys = comps.map((p) => Math.log10(p.mcap_usd!));
+  const meanX = xs.reduce((n, x) => n + x, 0) / xs.length;
+  const meanY = ys.reduce((n, y) => n + y, 0) / ys.length;
+  let num = 0;
+  let den = 0;
+  for (let i = 0; i < xs.length; i++) {
+    num += (xs[i]! - meanX) * (ys[i]! - meanY);
+    den += (xs[i]! - meanX) ** 2;
   }
-  const globalMedian = allRatios.length > 0 ? median(allRatios) : 0.2;
-  const byCategory: CategoryMultiple[] = [...ratiosByCategory.entries()]
-    .map(([category, ratios]) => {
-      const raw = median(ratios);
-      const weight = ratios.length / (ratios.length + model.shrink_prior);
-      const shrunk = Math.exp(weight * Math.log(raw) + (1 - weight) * Math.log(globalMedian));
-      return {
-        category,
-        comps: ratios.length,
-        raw_median: Math.round(raw * 1e4) / 1e4,
-        multiple: Math.round(Math.min(model.multiple_cap, Math.max(model.multiple_floor, shrunk)) * 1e4) / 1e4,
-      };
+  const slope = den === 0 ? 0 : num / den;
+  return { intercept: Math.round((meanY - slope * meanX) * 1000) / 1000, slope: Math.round(slope * 1000) / 1000, comps: comps.length };
+}
+
+/**
+ * One category's offset from the curve: the median log10 residual of its live comps,
+ * shrunk toward zero with weight n / (n + shrink_prior), so a category with one live comp
+ * barely moves off the curve. A category with no live comp takes no offset at all.
+ */
+export function categoryOffsets(comps: SnapshotProtocol[], curve: SizeCurve, model: ModelConstants = MODEL): CategoryOffset[] {
+  const residuals = new Map<string, number[]>();
+  for (const p of comps) {
+    const residual = Math.log10(p.mcap_usd!) - (curve.intercept + curve.slope * Math.log10(p.tvl_usd));
+    const key = p.category ?? 'Other';
+    const list = residuals.get(key) ?? [];
+    list.push(residual);
+    residuals.set(key, list);
+  }
+  return [...residuals.entries()]
+    .map(([category, values]) => {
+      const weight = values.length / (values.length + model.shrink_prior);
+      const offset = weight * median(values);
+      return { category, comps: values.length, offset_log10: Math.round(offset * 1000) / 1000, factor: Math.round(10 ** offset * 1000) / 1000 };
     })
-    .sort((a, b) => b.multiple - a.multiple || a.category.localeCompare(b.category));
-  return { global_median: Math.round(globalMedian * 1e4) / 1e4, live_comps: allRatios.length, by_category: byCategory };
+    .sort((a, b) => b.offset_log10 - a.offset_log10 || a.category.localeCompare(b.category));
 }
 
-/** The category multiple for one protocol: its category's calibrated multiple, else the global median. */
-export function categoryMultipleFor(p: SnapshotProtocol, calibration: Calibration): number {
-  const found = calibration.by_category.find((c) => c.category === (p.category ?? 'Other'));
-  return found === undefined ? calibration.global_median : found.multiple;
+/** A protocol's base value off the curve: the curve at its TVL, times its category's factor. The factor — not the log offset — is what the dashboard carries, so the page's recomputation is the same arithmetic to the dollar. */
+export function curveValue(tvlUsd: number, category: string | null, curve: SizeCurve, offsets: CategoryOffset[]): number {
+  const found = offsets.find((o) => o.category === (category ?? 'Other'));
+  return 10 ** (curve.intercept + curve.slope * Math.log10(tvlUsd)) * (found === undefined ? 1 : found.factor);
 }
 
-/** The multipliers and the implied value one protocol gets under `model` and `calibration`. */
+/** The flat baseline's prediction: the median mcap / TVL of the training comps, times TVL. */
+function flatPrediction(tvlUsd: number, train: SnapshotProtocol[]): number {
+  return median(train.map((p) => p.mcap_usd! / p.tvl_usd)) * tvlUsd;
+}
+
+/** One blind test scored: median miss factor and the share within 3x and 10x, curve against flat. */
+function scoreSplit(name: string, train: SnapshotProtocol[], test: SnapshotProtocol[]): BacktestSplit {
+  const curveErrors: number[] = [];
+  const flatErrors: number[] = [];
+  for (const held of test) {
+    const rest = train.filter((p) => p !== held);
+    const fit = fitSizeCurve(rest);
+    const offs = categoryOffsets(rest, fit);
+    curveErrors.push(Math.abs(Math.log10(curveValue(held.tvl_usd, held.category, fit, offs) / held.mcap_usd!)));
+    flatErrors.push(Math.abs(Math.log10(flatPrediction(held.tvl_usd, rest) / held.mcap_usd!)));
+  }
+  const within = (errors: number[], factor: number): number =>
+    Math.round((errors.filter((e) => 10 ** e <= factor).length / errors.length) * 100);
+  return {
+    name,
+    train_n: train.length,
+    test_n: test.length,
+    curve_miss: Math.round(10 ** median(curveErrors) * 100) / 100,
+    flat_miss: Math.round(10 ** median(flatErrors) * 100) / 100,
+    curve_within3: within(curveErrors, 3),
+    flat_within3: within(flatErrors, 3),
+    curve_within10: within(curveErrors, 10),
+    flat_within10: within(flatErrors, 10),
+  };
+}
+
+/**
+ * The blind test, run two ways. Leave-one-out: every live comp in turn is held out, the curve
+ * is refitted without it, and the prediction is scored against the market cap the model never
+ * saw. Time split: the curve is fitted only on the comps listed before 2024 and tested on the
+ * ones listed since, so the test is genuinely newer launches. Both are scored against the same
+ * flat multiple, so the curve has to earn its keep twice.
+ */
+export function backtestCurve(snapshot: Snapshot): BacktestReport {
+  const comps = liveComps(snapshot);
+  const loo = scoreSplit('leave-one-out', comps, comps);
+  const train = comps.filter((p) => p.listed_at !== null && p.listed_at < '2024-01-01');
+  const test = comps.filter((p) => p.listed_at !== null && p.listed_at >= '2024-01-01');
+  const timeSplit = scoreSplit('time split, fit pre-2024', train, test);
+  const looErrors = comps
+    .map((held) => {
+      const rest = comps.filter((p) => p !== held);
+      const fit = fitSizeCurve(rest);
+      const offs = categoryOffsets(rest, fit);
+      return Math.abs(Math.log10(curveValue(held.tvl_usd, held.category, fit, offs) / held.mcap_usd!));
+    })
+    .sort((a, b) => a - b);
+  const p80 = looErrors[Math.min(looErrors.length - 1, Math.floor(looErrors.length * 0.8))];
+  return { loo, time_split: timeSplit, loo_p80_miss: Math.round(10 ** p80! * 100) / 100, live_with_listed_at: comps.filter((p) => p.listed_at !== null).length };
+}
+
+/** A small seeded generator, so the bootstrap refits are the same on every run. */
+function mulberry32(seed: number): () => number {
+  let state = seed >>> 0;
+  return () => {
+    state = (state + 0x6d2b79f5) >>> 0;
+    let t = state;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/** A percentile of sorted numbers, by linear position between the two nearest ranks. */
+function percentile(sorted: number[], q: number): number {
+  if (sorted.length === 0) return 0;
+  const at = q * (sorted.length - 1);
+  const lo = Math.floor(at);
+  const hi = Math.ceil(at);
+  return sorted[lo]! + (sorted[hi]! - sorted[lo]!) * (at - lo);
+}
+
+/**
+ * The bootstrap band: resample the live comps with replacement, refit the curve and the
+ * offsets, and re-score every candidate, 100 times. Each row's plausible range is the
+ * 10th to 90th percentile of its own refitted values, and its rank range is the 10th to
+ * 90th percentile of its refitted ranks — so a row whose rank holds across refits has earned
+ * it, and a row whose rank wanders says so in the open.
+ */
+export function bootstrapBands(
+  snapshot: Snapshot,
+  candidates: SnapshotProtocol[],
+  model: ModelConstants = MODEL,
+): Map<string, { low: number; high: number; rankLow: number; rankHigh: number }> {
+  const comps = liveComps(snapshot);
+  const draw = mulberry32(20261114);
+  const refits = 100;
+  const values = new Map<string, number[]>();
+  const ranks = new Map<string, number[]>();
+  for (const c of candidates) {
+    values.set(c.slug, []);
+    ranks.set(c.slug, []);
+  }
+  for (let r = 0; r < refits; r++) {
+    const sample: SnapshotProtocol[] = [];
+    for (let i = 0; i < comps.length; i++) sample.push(comps[Math.floor(draw() * comps.length)]!);
+    const fit = fitSizeCurve(sample);
+    const offs = categoryOffsets(sample, fit, model);
+    const scored = candidates
+      .map((p) => ({ slug: p.slug, implied: impliedValue(p, snapshot.as_of, model, fit, offs).implied }))
+      .sort((a, b) => b.implied - a.implied || (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0));
+    scored.forEach((s, i) => {
+      values.get(s.slug)!.push(s.implied);
+      ranks.get(s.slug)!.push(i + 1);
+    });
+  }
+  const bands = new Map<string, { low: number; high: number; rankLow: number; rankHigh: number }>();
+  for (const c of candidates) {
+    const vs = [...values.get(c.slug)!].sort((a, b) => a - b);
+    const rs = [...ranks.get(c.slug)!].sort((a, b) => a - b);
+    bands.set(c.slug, {
+      low: Math.max(1, Math.round(percentile(vs, 0.1))),
+      high: Math.max(1, Math.round(percentile(vs, 0.9))),
+      rankLow: Math.max(1, Math.round(percentile(rs, 0.1))),
+      rankHigh: Math.max(1, Math.round(percentile(rs, 0.9))),
+    });
+  }
+  return bands;
+}
+
+/** The multipliers and the implied value one protocol gets under `model`, the size curve and its category's offset. The curve sets the scale; growth, maturity and chain reach adjust it the way radar-2 did. */
 export function impliedValue(
   protocol: SnapshotProtocol,
   asOf: string,
   model: ModelConstants,
-  calibration: Calibration,
-): { implied: number; low: number; high: number; categoryMultiple: number; growthPct: number; growthMult: number; maturityMult: number; chainMult: number; age: number | null } {
+  curve: SizeCurve,
+  offsets: CategoryOffset[],
+): { implied: number; categoryFactor: number; growthPct: number; growthMult: number; maturityMult: number; chainMult: number; age: number | null } {
   const age = ageDays(asOf, protocol.listed_at);
   const rawGrowth = finite(protocol.change_7d, 0);
   const growthPct = Math.min(model.growth_cap, Math.max(model.growth_floor, rawGrowth));
@@ -306,27 +501,16 @@ export function impliedValue(
   const ageForModel = age ?? model.unknown_age_days;
   const maturityMult = model.maturity_floor + (Math.min(Math.max(ageForModel, 0), model.maturity_days) / model.maturity_days) * model.maturity_range;
   const chainMult = 1 + model.chain_step * Math.min(Math.max(protocol.chains.length - 1, 0), model.chain_cap);
-  const categoryMultiple = categoryMultipleFor(protocol, calibration);
-  const implied = Math.max(1, Math.round(protocol.tvl_usd * categoryMultiple * growthMult * maturityMult * chainMult));
-  // The band's ends: the headline re-scaled to the two ends of the calibration, the global
-  // median on one side and the category's raw median on the other, each clamped to the
-  // multiples the shipped model allows. The shrunk multiple sits between the two, so the
-  // headline always lands inside its own band.
-  let rawMultiple = calibration.global_median;
-  for (const entry of calibration.by_category) {
-    if (entry.category === (protocol.category ?? 'Other') && entry.raw_median !== null) rawMultiple = entry.raw_median;
-  }
-  const bandMultiple = Math.min(model.multiple_cap, Math.max(model.multiple_floor, rawMultiple));
-  const atGlobal = Math.max(1, Math.round((implied * calibration.global_median) / categoryMultiple));
-  const atRaw = Math.max(1, Math.round((implied * bandMultiple) / categoryMultiple));
-  const low = Math.min(atGlobal, atRaw);
-  const high = Math.max(atGlobal, atRaw);
-  return { implied, low, high, categoryMultiple, growthPct, growthMult, maturityMult, chainMult, age };
+  const found = offsets.find((o) => o.category === (protocol.category ?? 'Other'));
+  const categoryFactor = found === undefined ? 1 : found.factor;
+  const base = curveValue(protocol.tvl_usd, protocol.category, curve, offsets);
+  const implied = Math.max(1, Math.round(base * growthMult * maturityMult * chainMult));
+  return { implied, categoryFactor, growthPct, growthMult, maturityMult, chainMult, age };
 }
 
 // A band's width, in words, so the dashboard can label every row with it and a reader can tell at
 // a glance whether the headline stands on the protocol or on the calibration. Fourfold or more
-// means the two ends of the calibration disagree so much that the headline is mostly a guess.
+// means the bootstrap refits disagree so much about the row that the headline is mostly a guess.
 export function bandLabel(bandRatio: number): 'narrow' | 'wide' | 'very wide' {
   if (bandRatio >= 4) return 'very wide';
   if (bandRatio >= 2) return 'wide';
@@ -371,7 +555,9 @@ function bySlug(protocols: SnapshotProtocol[]): Map<string, SnapshotProtocol> {
 
 /** The protocols the board ranks, strongest first, with ranks 1..n. */
 export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): BoardRow[] {
-  const calibration = calibrateMultiples(snapshot, model);
+  const comps = liveComps(snapshot);
+  const curve = fitSizeCurve(comps);
+  const offsets = categoryOffsets(comps, curve, model);
   const watchlist = new Set(snapshot.watchlist);
   const chosen = snapshot.protocols.filter((p) => isRankable(p));
   // The watchlist is the floor: every slug on it is ranked even if the rule above ever missed
@@ -381,38 +567,46 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
     const p = index.get(slug);
     if (p !== undefined && !chosen.includes(p)) chosen.push(p);
   }
+  const bands = bootstrapBands(snapshot, chosen, model);
   const scored = chosen.map((p) => {
-    const v = impliedValue(p, snapshot.as_of, model, calibration);
+    const v = impliedValue(p, snapshot.as_of, model, curve, offsets);
     return { p, ...v };
   });
   scored.sort((a, b) => b.implied - a.implied || (a.p.slug < b.p.slug ? -1 : a.p.slug > b.p.slug ? 1 : 0));
-  return scored.map((s, i) => ({
-    rank: i + 1,
-    slug: s.p.slug,
-    name: s.p.name,
-    category: s.p.category,
-    chains: s.p.chains,
-    tvl_usd: s.p.tvl_usd,
-    change_7d: s.p.change_7d,
-    mcap_usd: s.p.mcap_usd,
-    listed_at: s.p.listed_at,
-    gecko_id: s.p.gecko_id,
-    symbol: s.p.symbol,
-    token_status: 'pre-token',
-    on_watchlist: watchlist.has(s.p.slug),
-    age_days: s.age,
-    implied_value_usd: s.implied,
-    value_range_usd: { low_usd: s.low, high_usd: s.high, band_ratio: Math.round((s.high / s.low) * 100) / 100 },
-    model: {
-      category_multiple: round4(s.categoryMultiple),
-      growth_pct: s.growthPct,
-      growth_multiplier: round4(s.growthMult),
-      maturity_multiplier: round4(s.maturityMult),
-      chain_multiplier: round4(s.chainMult),
+  return scored.map((s, i) => {
+    const band = bands.get(s.p.slug) ?? { low: s.implied, high: s.implied, rankLow: i + 1, rankHigh: i + 1 };
+    const econ = farmEconomics(s.p, s.age, s.implied);
+    return {
+      rank: i + 1,
+      slug: s.p.slug,
+      name: s.p.name,
+      category: s.p.category,
+      chains: s.p.chains,
+      tvl_usd: s.p.tvl_usd,
+      change_7d: s.p.change_7d,
+      mcap_usd: s.p.mcap_usd,
+      listed_at: s.p.listed_at,
+      gecko_id: s.p.gecko_id,
+      symbol: s.p.symbol,
+      token_status: 'pre-token',
+      on_watchlist: watchlist.has(s.p.slug),
       age_days: s.age,
-    },
-    farm_steps: farmSteps(s.p, s.age).map(stepText),
-  }));
+      implied_value_usd: s.implied,
+      value_range_usd: { low_usd: band.low, high_usd: band.high, band_ratio: Math.round((band.high / band.low) * 100) / 100 },
+      model: {
+        category_factor: round4(s.categoryFactor),
+        growth_pct: s.growthPct,
+        growth_multiplier: round4(s.growthMult),
+        maturity_multiplier: round4(s.maturityMult),
+        chain_multiplier: round4(s.chainMult),
+        age_days: s.age,
+      },
+      economics: econ,
+      rank_low: band.rankLow,
+      rank_high: band.rankHigh,
+      farm_steps: farmSteps(s.p, s.age, s.implied).map(stepText),
+    };
+  });
 }
 
 const round4 = (n: number): number => Math.round(n * 1e4) / 1e4;
@@ -478,19 +672,62 @@ function weeklyActionFor(p: SnapshotProtocol): string {
   return 'a deposit, a borrow, a swap or a vote';
 }
 
+/** The position the economics are netted at: $1,000 deposited. The slice scales with the deposit; the fees do not, which is the whole point of netting it. */
+export const FARM_CAPITAL_USD = 1000;
+/** The share of a launch assumed to go to depositors, pro rata by deposit. */
+export const AIRDROP_SHARE = 0.1;
+/** The yield forgone by locking the $1,000 in the farm instead of a T-bill, per year. */
+export const FORGONE_YIELD = 0.04;
+
 /**
- * A protocol's farm plan: seven steps, each an action with a cost and a time. The plan is derived
+ * What a $1,000 position in this protocol nets, in dollars. The slice is the protocol's
+ * implied value times the depositors' 10%, times the position's share of TVL. The fees are
+ * the plan's own gas: setup, $2 a week for the hold, and $3 to exit. The forgone yield is
+ * 4% a year on the $1,000 for the hold. FARM means the slice pays the fees and the yield;
+ * THIN means it beats the fees only; SKIP means the fees alone eat it. The assumptions are
+ * stated, not hidden: change the share or the yield and the verdicts move, which is why the
+ * dashboard states both beside every verdict.
+ */
+export function farmEconomics(p: SnapshotProtocol, age: number | null, implied: number): FarmEconomics {
+  const hold = holdDaysFor(age);
+  const weeks = Math.ceil(hold / 7);
+  const months = Math.ceil(hold / 30);
+  const setupGas = capitalFor(p) >= 150 ? 8 : 4;
+  const fees = setupGas + 2 * weeks + 3;
+  const slice = AIRDROP_SHARE * implied * (FARM_CAPITAL_USD / Math.max(1, p.tvl_usd));
+  const forgone = FARM_CAPITAL_USD * FORGONE_YIELD * (hold / 365);
+  const net = slice - fees - forgone;
+  const hours = 0.25 + weeks * (10 / 60) + months * (10 / 60) + 5 / 60;
+  const verdict = net > 0 ? 'FARM' : slice > fees ? 'THIN' : 'SKIP';
+  const round2 = (n: number): number => Math.round(n * 100) / 100;
+  return {
+    capital_usd: FARM_CAPITAL_USD,
+    slice_usd: round2(slice),
+    fees_usd: fees,
+    forgone_usd: round2(forgone),
+    net_usd: round2(net),
+    hold_days: hold,
+    weeks,
+    hours: round2(hours),
+    net_per_hour_usd: round2(net / hours),
+    verdict,
+  };
+}
+
+/**
+ * A protocol's farm plan: eight steps, each an action with a cost and a time. The plan is derived
  * from the protocol's own record (category, chains, TVL, age), never from a hand-written list of
  * names. It farms the protocol as it is today; if the protocol issues a token later, the same
- * position is the one an airdrop would read — and no step ever pays to claim anything.
+ * position is the one an airdrop would read — and no step ever pays to claim anything. The
+ * eighth step nets the plan at a $1,000 position, so the verdict is a number, not a slogan.
  */
-export function farmSteps(p: SnapshotProtocol, age: number | null): FarmStep[] {
+export function farmSteps(p: SnapshotProtocol, age: number | null, implied?: number): FarmStep[] {
   const chain = chainOf(p);
   const capital = capitalFor(p);
   const hold = holdDaysFor(age);
   const action = actionFor(p, capital, chain);
   const weekly = weeklyActionFor(p);
-  return [
+  const steps: FarmStep[] = [
     {
       text: `Use a fresh wallet that holds only the funds you plan to farm, and keep its seed phrase offline.`,
       cost: 'under $3 of gas for the first transaction',
@@ -527,6 +764,16 @@ export function farmSteps(p: SnapshotProtocol, age: number | null): FarmStep[] {
       time: '5 minutes',
     },
   ];
+  if (implied !== undefined) {
+    const econ = farmEconomics(p, age, implied);
+    const sign = econ.net_usd >= 0 ? '+' : '-';
+    steps.push({
+      text: `Net the plan at a $1,000 position: a $${econ.slice_usd.toFixed(2)} slice of the launch if 10% goes to depositors, minus $${econ.fees_usd} of gas and $${econ.forgone_usd.toFixed(2)} of forgone 4% yield, nets ${sign}$${Math.abs(econ.net_usd).toFixed(2)} — verdict ${econ.verdict}.`,
+      cost: `$${econ.fees_usd} of gas over ${econ.hold_days} days`,
+      time: `about ${econ.hours.toFixed(1)} hours of hands-on work`,
+    });
+  }
+  return steps;
 }
 
 /** The live-token protocols, by market cap, for the dashboard's Live token view. */
@@ -565,17 +812,27 @@ export function radarRow(row: BoardRow): RadarRow {
     value_high_usd: row.value_range_usd.high_usd,
     value_band_ratio: row.value_range_usd.band_ratio,
     value_band_label: bandLabel(row.value_range_usd.band_ratio),
-    category_multiple: row.model.category_multiple,
+    category_factor: row.model.category_factor,
     growth_multiplier: row.model.growth_multiplier,
     maturity_multiplier: row.model.maturity_multiplier,
     chain_multiplier: row.model.chain_multiplier,
+    verdict: row.economics.verdict,
+    slice_usd: row.economics.slice_usd,
+    fees_usd: row.economics.fees_usd,
+    net_usd: row.economics.net_usd,
+    net_per_hour_usd: row.economics.net_per_hour_usd,
+    rank_low: row.rank_low,
+    rank_high: row.rank_high,
   };
 }
 
 /** Everything the dashboard renders, from the snapshot. */
 export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): { board: BoardRow[]; radar: RadarData } {
   const board = buildBoard(snapshot, model);
-  const calibration = calibrateMultiples(snapshot, model);
+  const comps = liveComps(snapshot);
+  const curve = fitSizeCurve(comps);
+  const offsets = categoryOffsets(comps, curve, model);
+  const backtest = backtestCurve(snapshot);
   const live = liveRows(snapshot);
   const watchlist = new Set(snapshot.watchlist);
   const early = board.filter((r) => !watchlist.has(r.slug)).length;
@@ -584,6 +841,16 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
   const top10Total = board.slice(0, 10).reduce((n, r) => n + r.implied_value_usd, 0);
   const wideBand = board.filter((r) => r.value_range_usd.high_usd >= 2 * r.value_range_usd.low_usd).length;
   const veryWideBand = board.filter((r) => r.value_range_usd.band_ratio >= 4).length;
+  const verdictCounts = {
+    farm: board.filter((r) => r.economics.verdict === 'FARM').length,
+    thin: board.filter((r) => r.economics.verdict === 'THIN').length,
+    skip: board.filter((r) => r.economics.verdict === 'SKIP').length,
+  };
+  const bestPerHour = board
+    .filter((r) => watchlist.has(r.slug))
+    .sort((a, b) => b.economics.net_per_hour_usd - a.economics.net_per_hour_usd)
+    .slice(0, 3)
+    .map((r) => ({ slug: r.slug, name: r.name, net_usd: r.economics.net_usd, net_per_hour_usd: r.economics.net_per_hour_usd }));
   const radar: RadarData = {
     as_of: snapshot.as_of,
     source: snapshot.source,
@@ -599,7 +866,12 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
     top10_implied_total_usd: top10Total,
     wide_band_rows: wideBand,
     very_wide_band_rows: veryWideBand,
-    calibration,
+    curve,
+    offsets,
+    backtest,
+    verdict_counts: verdictCounts,
+    best_per_hour: bestPerHour,
+    comps: comps.map((p) => ({ slug: p.slug, name: p.name, category: p.category, tvl_usd: p.tvl_usd, mcap_usd: p.mcap_usd! })),
     rows: board.map(radarRow),
     live,
   };
