@@ -10,15 +10,17 @@
 // the board re-derives candidacy from the ten fields it does carry and says so per row.
 //
 // IMPLIED VALUE, FROM THE SNAPSHOT'S OWN FIGURES ONLY
-//   implied = 10 ^ (3.382 + 0.472 x log10(tvl_usd)) x category_factor x growth_mult x maturity_mult x chain_mult
+//   implied = 10 ^ (3.908 + 0.405 x log10(tvl_usd)) x category_factor x growth_mult x maturity_mult x chain_mult
 // The size curve is fitted, not chosen: least squares on log10(market cap) against log10(TVL)
-// over the 119 live-token protocols in this same snapshot (exchanges excluded, zero market caps
-// excluded — a zero has no logarithm). A slope of 0.472 says value grows slower than TVL, so a
-// $2B protocol is worth far less per TVL dollar than a $200M one. Each category then gets an
-// offset — the shrunk median of its live comps' residuals from the curve, weight n / (n + 4) —
-// so Prediction Market trades rich for its size and Liquid Staking trades cheap. No protocol
-// name is ever special-cased: the same function scores every row, and the dashboard recomputes
-// every row from the same inputs.
+// over the 94 live-token protocols in this same snapshot that can price a launch at all —
+// exchanges excluded, zero market caps excluded (a zero has no logarithm), and the categories
+// whose tokens trade at par by construction left out (a staking receipt, a stablecoin or a
+// bridged token is worth about its backing, not a market price for a protocol's token). A slope
+// of 0.405 says value grows slower than TVL, so a $2B protocol is worth far less per TVL dollar
+// than a $200M one. Each category then gets an offset — the shrunk median of its live comps'
+// residuals from the curve, weight n / (n + 8) — so Prediction Market trades rich for its size
+// and Staking Pool trades cheap. No protocol name is ever special-cased: the same function
+// scores every row, and the dashboard recomputes every row from the same inputs.
 //
 //   growth_mult   = 1 + clamp(change_7d, -50, 150) / 100 x 0.45   (null growth counts as 0)
 //   maturity_mult = 0.65 + 0.35 x min(age_days, 1095) / 1095      (unknown age counts as 365 days)
@@ -30,13 +32,16 @@
 // value if the record stayed as it is — it does not predict whether or when any token is issued,
 // and "records no token" is never "has no token".
 //
-// THE BLIND TEST (snapshot 2026-11-14, 119 live-token comps)
-// The curve is tested blind, twice, against one flat median multiple. Leave-one-out: each live
-// comp held out in turn, the curve refitted without it — median miss x3.52 against x4.94 flat,
-// 46% within 3x of the real cap against 34% flat, 78% within 10x against 75%. Time split: fitted
-// only on the 39 comps listed before 2024, tested on the 48 listed since — median miss x2.32
-// against x4.89 flat, 54% within 3x against 35%. The curve earns its keep on launches it never
-// saw. The dashboard shows the whole test, the curve's scatter and the offsets table.
+// THE BLIND TEST (snapshot 2026-11-14, 94 live-token comps)
+// The curve is tested blind, three times, against one flat median multiple. Leave-one-out: each
+// live comp held out in turn, the curve refitted without it — median miss x3.54 against x4.60
+// flat, 46% within 3x of the real cap against 36% flat, 78% within 10x against 74%. Time split:
+// fitted only on the 30 comps listed before 2024, tested on the 41 listed since — median miss
+// x2.06 against x4.29 flat, 56% within 3x against 37%. Category holdout: each kind of protocol
+// held out whole, the curve fitted on every other kind — median miss x3.69 against x4.21 flat,
+// 44% within 3x against 38%. The curve earns its keep on launches it never saw, on newer
+// launches, and on kinds of protocol it never saw. The dashboard shows the whole test, the
+// curve's scatter and the offsets table.
 //
 // THE PLAUSIBLE RANGE
 // The headline is one refit of the curve. So every row also carries the range its own value
@@ -50,7 +55,7 @@
 // Every row is netted at a $1,000 position: the slice is 10% of the implied value to depositors,
 // pro rata, minus the plan's own gas and the 4% a year forgone on the $1,000 for the hold.
 // FARM pays the fees and the yield, THIN beats the fees only, SKIP is eaten by the fees. At
-// $1,000 the board splits 99 FARM / 19 THIN / 80 SKIP — the giants' slices are thin because
+// $1,000 the board splits 108 FARM / 22 THIN / 68 SKIP — the giants' slices are thin because
 // the slice is a share of TVL, and a $2B TVL dilutes any deposit.
 
 /** The snapshot's protocol entry: exactly the ten fields the sealed input carries. */
@@ -104,7 +109,7 @@ export const MODEL: ModelConstants = {
   unknown_age_days: 365,
   chain_step: 0.015,
   chain_cap: 6,
-  shrink_prior: 4,
+  shrink_prior: 8,
   multiple_floor: 0.02,
   multiple_cap: 1.25,
   winsor_low: 0.005,
@@ -112,7 +117,7 @@ export const MODEL: ModelConstants = {
 };
 
 /** The model's version label: the dashboard names it and the rules quote it. */
-export const MODEL_VERSION = 'radar-3';
+export const MODEL_VERSION = 'radar-4';
 
 /** The size curve: log10(market cap) = intercept + slope x log10(TVL), fitted by least squares over the live-token comps. A slope under 1 says a token's value grows slower than its protocol's TVL: giants are worth less per TVL dollar than minnows, which a flat multiple cannot say. */
 export interface SizeCurve {
@@ -142,10 +147,12 @@ export interface BacktestSplit {
   flat_within10: number;
 }
 
-/** The whole blind test: leave-one-out over every live comp, plus a time split that fits only the protocols listed before 2024 and tests the newer ones. The flat baseline in both is one global median mcap / TVL for every protocol. */
+/** The whole blind test: leave-one-out over every live comp, plus a time split that fits only the protocols listed before 2024 and tests the newer ones, plus a category holdout that fits the curve on every other kind of protocol and tests the kind it never saw. The flat baseline in all three is one global median mcap / TVL for every protocol. */
 export interface BacktestReport {
   loo: BacktestSplit;
   time_split: BacktestSplit;
+  holdout: BacktestSplit;
+  holdout_by_category: { category: string; test_n: number; curve_miss: number; flat_miss: number }[];
   loo_p80_miss: number;
   live_with_listed_at: number;
 }
@@ -306,10 +313,15 @@ export function ageDays(asOf: string, listedAt: string | null): number | null {
   return Math.max(0, Math.floor((a - b) / DAY_MS));
 }
 
-/** The live-token comps the curve is fitted on: a market cap and a TVL, both positive, and not an exchange. An exchange's market cap is not a per-TVL price for a protocol's token, and a zero market cap has no logarithm. */
+/** The live-token comps the curve is fitted on: a market cap and a TVL, both positive, and not an exchange. An exchange's market cap is not a per-TVL price for a protocol's token, and a zero market cap has no logarithm. Also left out: the categories whose tokens trade at par by construction — a staking receipt, a stablecoin or a bridged token is worth about its backing, not a market price for a protocol's token — so they would pull the curve toward 1x and teach it nothing about a launch. */
 export function liveComps(snapshot: Snapshot): SnapshotProtocol[] {
-  return snapshot.protocols.filter((p) => p.mcap_usd !== null && p.mcap_usd > 0 && p.tvl_usd > 0 && p.category !== 'CEX');
+  return snapshot.protocols.filter(
+    (p) => p.mcap_usd !== null && p.mcap_usd > 0 && p.tvl_usd > 0 && p.category !== 'CEX' && !PAR_CATEGORIES.has(p.category ?? ''),
+  );
 }
+
+/** Categories whose tokens trade at par by construction, never as a launch comp. */
+const PAR_CATEGORIES = new Set(['Liquid Staking', 'Stablecoins', 'Bridge', 'Canonical Bridge', 'Liquid Restaking', 'Restaked BTC']);
 
 /**
  * Fit the size curve by least squares on log10(market cap) against log10(TVL): the line
@@ -393,11 +405,15 @@ function scoreSplit(name: string, train: SnapshotProtocol[], test: SnapshotProto
 }
 
 /**
- * The blind test, run two ways. Leave-one-out: every live comp in turn is held out, the curve
+ * The blind test, run three ways. Leave-one-out: every live comp in turn is held out, the curve
  * is refitted without it, and the prediction is scored against the market cap the model never
  * saw. Time split: the curve is fitted only on the comps listed before 2024 and tested on the
- * ones listed since, so the test is genuinely newer launches. Both are scored against the same
- * flat multiple, so the curve has to earn its keep twice.
+ * ones listed since, so the test is genuinely newer launches. Category holdout: each kind of
+ * protocol in turn is held out whole — the curve is fitted on every other category and tested
+ * on the kind it never saw — so the test is whether the curve travels to a kind of protocol
+ * it has no example of. All three are scored against the same flat multiple, so the curve has
+ * to earn its keep three times. The holdout's per-category table is the honest part: the curve
+ * wins overall, and the categories where it loses say so in the open.
  */
 export function backtestCurve(snapshot: Snapshot): BacktestReport {
   const comps = liveComps(snapshot);
@@ -405,6 +421,41 @@ export function backtestCurve(snapshot: Snapshot): BacktestReport {
   const train = comps.filter((p) => p.listed_at !== null && p.listed_at < '2024-01-01');
   const test = comps.filter((p) => p.listed_at !== null && p.listed_at >= '2024-01-01');
   const timeSplit = scoreSplit('time split, fit pre-2024', train, test);
+  const categories = [...new Set(comps.map((p) => p.category ?? 'Other'))].sort();
+  const holdoutByCategory: { category: string; test_n: number; curve_miss: number; flat_miss: number }[] = [];
+  const holdoutCurveErrors: number[] = [];
+  const holdoutFlatErrors: number[] = [];
+  for (const category of categories) {
+    const held = comps.filter((p) => (p.category ?? 'Other') === category);
+    const rest = comps.filter((p) => (p.category ?? 'Other') !== category);
+    if (held.length < 2 || rest.length < 20) continue;
+    const fit = fitSizeCurve(rest);
+    const offs = categoryOffsets(rest, fit);
+    const flat = median(rest.map((p) => p.mcap_usd! / p.tvl_usd));
+    const curveErrors = held.map((h) => Math.abs(Math.log10(curveValue(h.tvl_usd, h.category, fit, offs) / h.mcap_usd!)));
+    const flatErrors = held.map((h) => Math.abs(Math.log10((flat * h.tvl_usd) / h.mcap_usd!)));
+    holdoutCurveErrors.push(...curveErrors);
+    holdoutFlatErrors.push(...flatErrors);
+    holdoutByCategory.push({
+      category,
+      test_n: held.length,
+      curve_miss: Math.round(10 ** median(curveErrors) * 100) / 100,
+      flat_miss: Math.round(10 ** median(flatErrors) * 100) / 100,
+    });
+  }
+  const within = (errors: number[], factor: number): number =>
+    Math.round((errors.filter((e) => 10 ** e <= factor).length / errors.length) * 100);
+  const holdout: BacktestSplit = {
+    name: 'category holdout',
+    train_n: 0,
+    test_n: holdoutCurveErrors.length,
+    curve_miss: Math.round(10 ** median(holdoutCurveErrors) * 100) / 100,
+    flat_miss: Math.round(10 ** median(holdoutFlatErrors) * 100) / 100,
+    curve_within3: within(holdoutCurveErrors, 3),
+    flat_within3: within(holdoutFlatErrors, 3),
+    curve_within10: within(holdoutCurveErrors, 10),
+    flat_within10: within(holdoutFlatErrors, 10),
+  };
   const looErrors = comps
     .map((held) => {
       const rest = comps.filter((p) => p !== held);
@@ -414,7 +465,7 @@ export function backtestCurve(snapshot: Snapshot): BacktestReport {
     })
     .sort((a, b) => a - b);
   const p80 = looErrors[Math.min(looErrors.length - 1, Math.floor(looErrors.length * 0.8))];
-  return { loo, time_split: timeSplit, loo_p80_miss: Math.round(10 ** p80! * 100) / 100, live_with_listed_at: comps.filter((p) => p.listed_at !== null).length };
+  return { loo, time_split: timeSplit, holdout, holdout_by_category: holdoutByCategory, loo_p80_miss: Math.round(10 ** p80! * 100) / 100, live_with_listed_at: comps.filter((p) => p.listed_at !== null).length };
 }
 
 /** A small seeded generator, so the bootstrap refits are the same on every run. */
@@ -714,8 +765,38 @@ export function farmEconomics(p: SnapshotProtocol, age: number | null, implied: 
   };
 }
 
+/** The second thing that counts, by mechanism: the one action beyond the deposit that the protocol's kind of program actually reads. It is advice about the mechanism, not a claim about the protocol's own rules — the plan never says a protocol runs a points program it may not run. */
+function mechanismStepFor(p: SnapshotProtocol, capital: number, chain: string): FarmStep {
+  const c = (p.category ?? '').toLowerCase();
+  if (c.includes('lend') || c.includes('cdp') || c.includes('collateral'))
+    return { text: `Borrow at least once against the supply, then repay it: most lending programs weight borrowers as well as suppliers, and a borrow-and-repay leaves a second footprint.`, cost: 'about $2 of gas for the borrow and the repay', time: '10 minutes' };
+  if (c.includes('dex') || c.includes('leveraged farm'))
+    return { text: `Keep the liquidity in range while the pool is active: out-of-range liquidity earns nothing and shows no use, so check the range each week.`, cost: 'about $2 of gas to rebalance', time: '10 minutes a week' };
+  if (c.includes('yield') || c.includes('farm'))
+    return { text: `Harvest the vault's yield at least once and restake it: a harvest is the proof the position was live, not just deposited.`, cost: 'about $2 of gas per harvest', time: '10 minutes' };
+  if (c.includes('bridge'))
+    return { text: `Use the bridged funds in the destination app the same week: a bridge with no use after it looks like a transfer, not a farm.`, cost: 'about $2 of gas for the first use', time: '10 minutes' };
+  if (c.includes('staking') || c.includes('restak'))
+    return { text: `Keep the receipt token, do not sell it: selling it ends the position the program reads.`, cost: 'nothing to hold', time: 'no extra time' };
+  if (c.includes('perpetual') || c.includes('derivative') || c.includes('options'))
+    return { text: `Close the trade the same week you open it: the point is the open-and-close footprint, not the position.`, cost: 'about $2 of gas to open and close', time: '10 minutes' };
+  if (c.includes('prediction'))
+    return { text: `Settle at least one market: an open position alone is a weaker signal than a settled one.`, cost: 'about $2 of gas to settle', time: '10 minutes' };
+  if (c.includes('curator') || c.includes('allocator') || c.includes('vault'))
+    return { text: `Split the deposit across two vaults when the protocol runs more than one: a second vault is a second footprint.`, cost: 'about $4 of gas for the second deposit', time: '10 minutes' };
+  if (c.includes('stable'))
+    return { text: `Hold the minted asset through a full week: a mint-and-burn the same day is not a position.`, cost: 'nothing to hold', time: '7 days' };
+  if (c.includes('rwa'))
+    return { text: `Hold through one yield payout: the payout is the proof the position was live.`, cost: 'nothing to hold', time: 'until the first payout' };
+  if (c.includes('insurance'))
+    return { text: `Keep the policy active through its first full week: a policy bought and dropped the same day is not a position.`, cost: 'nothing to hold', time: '7 days' };
+  if (c.includes('chain') || c.includes('payments'))
+    return { text: `Repeat the payment weekly on the same chain: one transfer is not a pattern.`, cost: 'about $1 of gas a week', time: '5 minutes a week' };
+  return { text: `Do a second, different action in the app — a vote, a second deposit or a swap — so the wallet shows more than one kind of use.`, cost: 'about $2 of gas', time: '10 minutes' };
+}
+
 /**
- * A protocol's farm plan: eight steps, each an action with a cost and a time. The plan is derived
+ * A protocol's farm plan: nine steps, each an action with a cost and a time. The plan is derived
  * from the protocol's own record (category, chains, TVL, age), never from a hand-written list of
  * names. It farms the protocol as it is today; if the protocol issues a token later, the same
  * position is the one an airdrop would read — and no step ever pays to claim anything. The
@@ -738,6 +819,7 @@ export function farmSteps(p: SnapshotProtocol, age: number | null, implied?: num
       cost: `$${capital} of capital and about $${capital >= 150 ? 8 : 4} of gas`,
       time: '15 minutes to set up',
     },
+    mechanismStepFor(p, capital, chain),
     {
       text: `Do one qualifying action each week — ${weekly} — so the wallet shows repeat use, not a single deposit.`,
       cost: 'about $2 of gas a week',
@@ -776,10 +858,9 @@ export function farmSteps(p: SnapshotProtocol, age: number | null, implied?: num
   return steps;
 }
 
-/** The live-token protocols, by market cap, for the dashboard's Live token view. */
+/** The live-token protocols, by market cap, for the dashboard's Live token view: the comps the curve is fitted on, so the tab is the curve's source and nothing else. */
 export function liveRows(snapshot: Snapshot): LiveRow[] {
-  return snapshot.protocols
-    .filter((p) => !isPreToken(p) && p.category !== 'CEX')
+  return liveComps(snapshot)
     .sort((a, b) => (b.mcap_usd ?? 0) - (a.mcap_usd ?? 0) || b.tvl_usd - a.tvl_usd)
     .slice(0, 24)
     .map((p) => ({

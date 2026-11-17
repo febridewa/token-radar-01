@@ -141,7 +141,7 @@ tbody tr[data-selected="true"] { background: color-mix(in srgb, var(--accent) 8%
 .equation span { color: var(--muted); }
 .equation .band b { color: var(--accent-ink); }
 td.num.band-wide { color: var(--accent-ink); }
-td.num.band-very-wide { color: var(--negative); font-weight: 700; }
+td.num.band-very-wide { color: var(--accent-ink); font-weight: 600; }
 div.field .check + .check { margin-top: var(--step-2); }
 .steps { margin: 0; padding-left: var(--step-5); display: grid; gap: var(--step-3); }
 .steps li { padding-left: var(--step-1); }

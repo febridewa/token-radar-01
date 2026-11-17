@@ -1,4 +1,4 @@
-// Token Radar's dashboard, radar-3. It reads window.RADAR (written beside dashboard/ by main.ts)
+// Token Radar's dashboard, radar-4. It reads window.RADAR (written beside dashboard/ by main.ts)
 // and renders the ranked board, a filterable table, a per-protocol detail drawer with the model's
 // own inputs and the protocol's farm plan, the live-token set aside, and the offsets table
 // with a model sandbox. No network: every byte it shows is in data.js.
@@ -143,6 +143,22 @@
     var hours = 0.25 + weeks * (10 / 60) + months * (10 / 60) + 5 / 60;
     return { slice: Math.round(slice * 100) / 100, fees: fees, forgone: Math.round(forgone * 100) / 100, net: Math.round(net * 100) / 100, hold: hold, weeks: weeks, hours: Math.round(hours * 100) / 100, perHour: Math.round((net / hours) * 100) / 100, verdict: net > 0 ? 'FARM' : slice > fees ? 'THIN' : 'SKIP' };
   }
+  function mechanismStepFor(p, capital, chain) {
+    var c = (p.category || '').toLowerCase();
+    if (c.indexOf('lend') >= 0 || c.indexOf('cdp') >= 0 || c.indexOf('collateral') >= 0) return { text: 'Borrow at least once against the supply, then repay it: most lending programs weight borrowers as well as suppliers, and a borrow-and-repay leaves a second footprint.', cost: 'about $2 of gas for the borrow and the repay', time: '10 minutes' };
+    if (c.indexOf('dex') >= 0 || c.indexOf('leveraged farm') >= 0) return { text: 'Keep the liquidity in range while the pool is active: out-of-range liquidity earns nothing and shows no use, so check the range each week.', cost: 'about $2 of gas to rebalance', time: '10 minutes a week' };
+    if (c.indexOf('yield') >= 0 || c.indexOf('farm') >= 0) return { text: 'Harvest the vault\'s yield at least once and restake it: a harvest is the proof the position was live, not just deposited.', cost: 'about $2 of gas per harvest', time: '10 minutes' };
+    if (c.indexOf('bridge') >= 0) return { text: 'Use the bridged funds in the destination app the same week: a bridge with no use after it looks like a transfer, not a farm.', cost: 'about $2 of gas for the first use', time: '10 minutes' };
+    if (c.indexOf('staking') >= 0 || c.indexOf('restak') >= 0) return { text: 'Keep the receipt token, do not sell it: selling it ends the position the program reads.', cost: 'nothing to hold', time: 'no extra time' };
+    if (c.indexOf('perpetual') >= 0 || c.indexOf('derivative') >= 0 || c.indexOf('options') >= 0) return { text: 'Close the trade the same week you open it: the point is the open-and-close footprint, not the position.', cost: 'about $2 of gas to open and close', time: '10 minutes' };
+    if (c.indexOf('prediction') >= 0) return { text: 'Settle at least one market: an open position alone is a weaker signal than a settled one.', cost: 'about $2 of gas to settle', time: '10 minutes' };
+    if (c.indexOf('curator') >= 0 || c.indexOf('allocator') >= 0 || c.indexOf('vault') >= 0) return { text: 'Split the deposit across two vaults when the protocol runs more than one: a second vault is a second footprint.', cost: 'about $4 of gas for the second deposit', time: '10 minutes' };
+    if (c.indexOf('stable') >= 0) return { text: 'Hold the minted asset through a full week: a mint-and-burn the same day is not a position.', cost: 'nothing to hold', time: '7 days' };
+    if (c.indexOf('rwa') >= 0) return { text: 'Hold through one yield payout: the payout is the proof the position was live.', cost: 'nothing to hold', time: 'until the first payout' };
+    if (c.indexOf('insurance') >= 0) return { text: 'Keep the policy active through its first full week: a policy bought and dropped the same day is not a position.', cost: 'nothing to hold', time: '7 days' };
+    if (c.indexOf('chain') >= 0 || c.indexOf('payments') >= 0) return { text: 'Repeat the payment weekly on the same chain: one transfer is not a pattern.', cost: 'about $1 of gas a week', time: '5 minutes a week' };
+    return { text: 'Do a second, different action in the app — a vote, a second deposit or a swap — so the wallet shows more than one kind of use.', cost: 'about $2 of gas', time: '10 minutes' };
+  }
   function farmSteps(p) {
     var chain = chainOf(p);
     var capital = capitalFor(p);
@@ -150,6 +166,7 @@
     var steps = [
       { text: 'Use a fresh wallet that holds only the funds you plan to farm, and keep its seed phrase offline.', cost: 'under $3 of gas for the first transaction', time: '5 minutes' },
       { text: actionFor(p, capital, chain), cost: '$' + capital + ' of capital and about $' + (capital >= 150 ? 8 : 4) + ' of gas', time: '15 minutes to set up' },
+      mechanismStepFor(p, capital, chain),
       { text: 'Do one qualifying action each week — ' + weeklyActionFor(p) + ' — so the wallet shows repeat use, not a single deposit.', cost: 'about $2 of gas a week', time: '10 minutes a week' },
       { text: 'Hold the position for at least ' + hold + ' days so the activity is counted in more than one snapshot.', cost: 'the $' + capital + ' stays in the position', time: hold + ' days' },
       { text: "Each month, open the protocol's own points or rewards page from its official site and check the position is counted.", cost: 'no fee to check', time: '10 minutes a month' },
@@ -257,7 +274,7 @@
         el('div', { class: 'fact' }, el('span', { text: 'Watchlist covered' }), el('b', { text: DATA.watchlist_size + ' / ' + DATA.watchlist_size })),
         el('div', { class: 'fact' }, el('span', { text: 'Launch candidates scored' }), el('b', { text: String(DATA.board_size) })),
         el('div', { class: 'fact' }, el('span', { text: 'Board implied value' }), el('b', { text: fmtUsd(DATA.board_implied_total_usd) })),
-        el('div', { class: 'fact' }, el('span', { text: 'Size curve, log10(mcap) on log10(TVL)' }), el('b', { text: DATA.curve.intercept + ' + ' + DATA.curve.slope + 'x (' + DATA.curve.comps + ' live comps)' })),
+        el('div', { class: 'fact' }, el('span', { text: 'Size curve' }), el('b', { text: DATA.curve.intercept + ' + ' + DATA.curve.slope + 'x · ' + DATA.curve.comps + ' comps' })),
         el('div', { class: 'fact' }, el('span', { text: 'Live-token protocols set aside' }), el('b', { text: String(DATA.live_size) })),
         el('div', { class: 'fact' }, el('span', { text: 'Very wide bands (4x or more)' }), el('b', { text: String(DATA.very_wide_band_rows) }))
       )
@@ -494,7 +511,7 @@
       ),
       el('section', { class: 'panel model' },
         el('h2', { text: 'Tested blind, against one flat multiple' }),
-        el('p', { class: 'sub', text: 'The curve is fitted without the answers, then scored on them — twice. Leave-one-out holds each live token out in turn and refits the curve without it. The time split fits only the protocols listed before 2024 and tests the ones listed since, so the test is genuinely newer launches. The flat baseline is one global median mcap / TVL for every protocol. Miss is the median factor between the prediction and the real market cap; within 3x and 10x are the shares that close.' }),
+        el('p', { class: 'sub', text: 'The curve is fitted without the answers, then scored on them — three times. Leave-one-out holds each live token out in turn and refits the curve without it. The time split fits only the protocols listed before 2024 and tests the ones listed since, so the test is genuinely newer launches. The category holdout fits the curve on every other kind of protocol and tests the kind it never saw, so the test is whether the curve travels to a kind of protocol it has no example of. The flat baseline is one global median mcap / TVL for every protocol. Miss is the median factor between the prediction and the real market cap; within 3x and 10x are the shares that close.' }),
         el('div', { class: 'table-wrap' },
           el('table', null,
             el('thead', null, el('tr', null, el('th', { scope: 'col', text: 'Blind test' }), el('th', { scope: 'col', text: 'Tested' }), el('th', { scope: 'col', text: 'Curve miss' }), el('th', { scope: 'col', text: 'Flat miss' }), el('th', { scope: 'col', text: 'Within 3x, curve / flat' }), el('th', { scope: 'col', text: 'Within 10x, curve / flat' }))),
@@ -514,11 +531,19 @@
                 el('td', { class: 'num', text: 'x' + bt.time_split.flat_miss }),
                 el('td', { class: 'num', text: bt.time_split.curve_within3 + '% / ' + bt.time_split.flat_within3 + '%' }),
                 el('td', { class: 'num', text: bt.time_split.curve_within10 + '% / ' + bt.time_split.flat_within10 + '%' })
+              ),
+              el('tr', null,
+                el('td', null, el('b', { text: 'Category holdout' })),
+                el('td', { class: 'num', text: String(bt.holdout.test_n) + ' tested, ' + (bt.holdout_by_category || []).length + ' kinds held out' }),
+                el('td', { class: 'num', text: 'x' + bt.holdout.curve_miss }),
+                el('td', { class: 'num', text: 'x' + bt.holdout.flat_miss }),
+                el('td', { class: 'num', text: bt.holdout.curve_within3 + '% / ' + bt.holdout.flat_within3 + '%' }),
+                el('td', { class: 'num', text: bt.holdout.curve_within10 + '% / ' + bt.holdout.flat_within10 + '%' })
               )
             )
           )
         ),
-        el('p', { class: 'sub', text: 'The leave-one-out 80th-percentile miss is x' + bt.loo_p80_miss + ' — four of five blind predictions land inside that factor. The curve beats the flat multiple on every number in both tests, which is why the board is priced off the curve and not off a median.' })
+        el('p', { class: 'sub', text: 'The leave-one-out 80th-percentile miss is x' + bt.loo_p80_miss + ' — four of five blind predictions land inside that factor. The curve beats the flat multiple on every number in all three tests, which is why the board is priced off the curve and not off a median.' })
       ),
       el('section', { class: 'panel model' },
         el('h2', { text: 'Traded tokens and the curve' }),
@@ -535,8 +560,25 @@
         state.sandbox ? reset : el('p', { class: 'sub', text: 'Sliders are at the shipped weights.' })
       ),
       el('section', { class: 'panel model' },
+        el('h2', { text: 'Where the curve travels, and where it does not' }),
+        el('p', { class: 'sub', text: 'The category holdout, kind by kind: each row is one kind of protocol the curve never saw while it was fitted. The curve wins overall — and the kinds where it loses say so in the open. Lending and Payments are the two where the flat multiple does better, which is why Lending rows carry wide bands on this board; Basis Trading, Restaking and Onchain Capital Allocator are where the curve earns its keep hardest.' }),
+        el('div', { class: 'table-wrap' },
+          el('table', null,
+            el('thead', null, el('tr', null, el('th', { scope: 'col', text: 'Kind held out' }), el('th', { scope: 'col', text: 'Tested' }), el('th', { scope: 'col', text: 'Curve miss' }), el('th', { scope: 'col', text: 'Flat miss' }))),
+            el('tbody', null, (bt.holdout_by_category || []).map(function (h) {
+              return el('tr', null,
+                el('td', null, el('b', { text: h.category })),
+                el('td', { class: 'num', text: String(h.test_n) }),
+                el('td', { class: 'num', text: 'x' + h.curve_miss }),
+                el('td', { class: 'num', text: 'x' + h.flat_miss })
+              );
+            }))
+          )
+        )
+      ),
+      el('section', { class: 'panel model' },
         el('h2', { text: 'Category offsets from the curve' }),
-        el('p', { class: 'sub', text: 'Each category\u2019s offset is the shrunk median of its live comps\u2019 log10 residuals from the size curve, weight n / (n + 4), so a category with one live comp barely moves off the curve. A factor above 1 says the category\u2019s tokens trade rich for their size; below 1 says they trade cheap. What the table says: Prediction Market and Privacy trade rich, Liquid Staking and Onchain Capital Allocator trade cheap — so the giant allocators rank far below their TVL rank.' }),
+        el('p', { class: 'sub', text: 'Each category\u2019s offset is the shrunk median of its live comps\u2019 log10 residuals from the size curve, weight n / (n + 8), so a category with one live comp barely moves off the curve. A factor above 1 says the category\u2019s tokens trade rich for their size; below 1 says they trade cheap. What the table says: Prediction Market and Privacy trade rich, Staking Pool and Liquidity Manager trade cheap — so the giant allocators rank far below their TVL rank.' }),
         el('div', { class: 'table-wrap' },
           el('table', null,
             el('thead', null, el('tr', null, el('th', { scope: 'col', text: 'Category' }), el('th', { scope: 'col', text: 'Live comps' }), el('th', { scope: 'col', text: 'Offset' }), el('th', { scope: 'col', text: 'Factor' }))),
@@ -587,6 +629,15 @@
       el('p', { class: 'sub', text: 'Model ' + DATA.model_version + ': the same function scores every protocol. The page recomputes this row as ' + fmtUsd(recomputed) + (recomputed === row.implied_value_usd ? ', the same number board.json carries.' : ', which differs from the board: the data would be stale.') + ' This is an estimate, not a price. The protocol records no token in this snapshot — that is not proof it has none. The plausible range is the row\u2019s 10th to 90th percentile across 100 bootstrap refits of the curve: a narrow range means the rank stands on the protocol, a wide one means it leans on the calibration.' })
     ));
     dialog.appendChild(el('section', { class: 'detail-section' },
+      el('h3', { text: 'Farm plan' }),
+      el('ol', { class: 'steps' }, steps.map(function (s) {
+        var at = s.indexOf(' Cost: ');
+        var action = at >= 0 ? s.slice(0, at) : s;
+        var tail = at >= 0 ? s.slice(at + 1) : '';
+        return el('li', null, el('b', { text: action }), el('span', { class: 'cost', text: tail }));
+      }))
+    ));
+    dialog.appendChild(el('section', { class: 'detail-section' },
       el('h3', { text: 'Farm economics — a $1,000 position, netted' }),
       el('div', { class: 'equation' },
         el('div', null, el('span', { text: 'Slice of the launch (10% to depositors, pro rata)' }), el('b', { class: 'num', text: fmtMoney(econ.slice) })),
@@ -597,15 +648,6 @@
         el('div', { class: 'band' }, el('span', { text: 'Verdict' }), el('b', { class: 'num', text: econ.verdict }))
       ),
       el('p', { class: 'sub', text: 'FARM means the slice pays the gas and the forgone yield; THIN means it beats the gas only; SKIP means the gas alone eats it. The slice scales with the deposit and the gas does not, so a bigger position nets better and a smaller one worse — the $1,000 is the yardstick, stated, not hidden.' })
-    ));
-    dialog.appendChild(el('section', { class: 'detail-section' },
-      el('h3', { text: 'Farm plan' }),
-      el('ol', { class: 'steps' }, steps.map(function (s) {
-        var at = s.indexOf(' Cost: ');
-        var action = at >= 0 ? s.slice(0, at) : s;
-        var tail = at >= 0 ? s.slice(at + 1) : '';
-        return el('li', null, el('b', { text: action }), el('span', { class: 'cost', text: tail }));
-      }))
     ));
     if (typeof dialog.showModal === 'function') {
       if (!dialog.open) dialog.showModal();
