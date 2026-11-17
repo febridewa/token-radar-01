@@ -1,14 +1,14 @@
 // A working token-radar-01 entry (Node 22, standard library only).
 //
 // The program reads the sealed snapshot from /input/snapshot.json (or --input <file|dir>), scores every
-// pre-token protocol with the model in lib/model.ts, writes the ranked board to /output/board.json, and
-// copies this repository's dashboard/ and screenshots/ to /output. Last, it writes /output/dossier.json,
-// the summary the judge reads, with the vendored make.fun library.
+// pre-token protocol with the model in dashboard/model.js — the same file the dashboard runs in the
+// browser, so the page's recomputation is the same code as the build — writes the ranked board to
+// /output/board.json, and copies this repository's dashboard/ and screenshots/ to /output. Last, it
+// writes /output/dossier.json, the summary the judge reads, with the vendored make.fun library.
 //
-// The dashboard is a static page, no framework and no network: dashboard/index.html, dashboard/app.css
-// and dashboard/app.js read /output/data.js, which this program writes from the same board. A starting
-// point, not a winner: it covers the watchlist, states the model and gives every protocol a farm plan.
-// Change the model, the page or the plan; keep the gate's shape.
+// The dashboard is a static page, no framework and no network: dashboard/index.html, dashboard/app.css,
+// dashboard/app.js and dashboard/model.js read /output/data.js, which this program writes from the
+// same board. Change the model, the page or the plan; keep the gate's shape.
 //
 // Outside the grader's container, MAKEFUN_OUTPUT_DIR stands in for /output:
 //   mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts --input ../input/snapshot.json
@@ -16,8 +16,11 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { boardIssue, buildRadar, dataScript, parseSnapshot } from './lib/model.ts';
+import { createRequire } from 'node:module';
 import { buildDossier } from './vendor/makefun-board.ts';
+
+const require = createRequire(import.meta.url);
+const M = require('./dashboard/model.js');
 
 const here = fileURLToPath(new URL('.', import.meta.url));
 
@@ -42,9 +45,9 @@ if (!existsSync(inputFile)) {
 }
 const out = arg('output', process.env.MAKEFUN_OUTPUT_DIR ?? '/output');
 
-const snapshot = parseSnapshot(readFileSync(inputFile, 'utf8'));
-const { board, radar } = buildRadar(snapshot);
-const issue = boardIssue(board, snapshot);
+const snapshot = M.parseSnapshot(readFileSync(inputFile, 'utf8'));
+const { board, radar } = M.buildRadar(snapshot);
+const issue = M.boardIssue(board, snapshot);
 if (issue !== null) {
   process.stderr.write(`token radar: the model wrote a board the gate refuses: ${issue}\n`);
   process.exit(1);
@@ -52,7 +55,7 @@ if (issue !== null) {
 
 mkdirSync(out, { recursive: true });
 writeFileSync(join(out, 'board.json'), `${JSON.stringify({ rows: board })}\n`);
-writeFileSync(join(out, 'data.js'), dataScript(radar));
+writeFileSync(join(out, 'data.js'), M.dataScript(radar));
 
 /** Copy one directory's regular files into `to`, skipping names that start with a dot. */
 function copyFiles(from: string, to: string): string[] {
@@ -85,11 +88,12 @@ for (const name of shots) {
 // The dossier is written last: the scorer rebuilds it from this /output and compares bytes.
 writeFileSync(join(out, 'dossier.json'), buildDossier(out, { text_max_bytes: TEXT_MAX_BYTES, screenshots: SCREENSHOT_CAPS, dashboard: { max_files: 400, max_bytes: 4_194_304 } }));
 
+const bt = radar.backtest;
 process.stdout.write(
-  `token radar: ${snapshot.protocols.length} protocols, ${snapshot.watchlist.length} on the watchlist, ${board.length} rows scored (${radar.early_size} early, ${radar.live_size} live set aside)\n` +
-    `token radar: model ${radar.model_version}, size curve log10(mcap) = ${radar.curve.intercept} + ${radar.curve.slope} x log10(TVL) from ${radar.curve.comps} live comps, board implied value $${radar.board_implied_total_usd.toLocaleString('en-US')}\n` +
-    `token radar: blind leave-one-out median miss x${radar.backtest.loo.curve_miss} vs x${radar.backtest.loo.flat_miss} flat (${radar.backtest.loo.curve_within3}% within 3x vs ${radar.backtest.loo.flat_within3}%); time split x${radar.backtest.time_split.curve_miss} vs x${radar.backtest.time_split.flat_miss} flat; category holdout x${radar.backtest.holdout.curve_miss} vs x${radar.backtest.holdout.flat_miss} flat (${radar.backtest.holdout.curve_within3}% within 3x vs ${radar.backtest.holdout.flat_within3}%)\n` +
-    `token radar: bootstrap band spans 2x or more for ${radar.wide_band_rows} of ${board.length} rows, 4x or more for ${radar.very_wide_band_rows}\n` +
-    `token radar: farm verdicts at $1,000: ${radar.verdict_counts.farm} FARM / ${radar.verdict_counts.thin} THIN / ${radar.verdict_counts.skip} SKIP; best on the watchlist ${radar.best_per_hour[0]?.name ?? 'none'} at $${radar.best_per_hour[0]?.net_per_hour_usd ?? 0}/hour\n` +
-    `token radar: wrote ${join(out, 'board.json')}, ${join(out, 'data.js')}, ${join(out, 'dashboard')} (3 files), ${join(out, 'screenshots')} (${shots.length} images) and ${join(out, 'dossier.json')}\n`,
+  `token radar: ${snapshot.protocols.length} protocols, ${snapshot.watchlist.length} on the watchlist, ${board.length} rows scored (${radar.universe.set_aside['excluded category'] ?? 0} set aside by category, ${radar.universe.set_aside['versioned name'] ?? 0} versioned, ${radar.universe.set_aside['wrapped/staked name'] ?? 0} wrapped/staked)\n` +
+    `token radar: model ${radar.model_version}, size curve log10(mcap) = ${radar.curve.intercept} + ${radar.curve.slope} x log10(TVL) from ${radar.curve.comps} live comps, board implied value $${board.reduce((n, r) => n + r.implied_value_usd, 0).toLocaleString('en-US')}\n` +
+    `token radar: blind leave-one-out ladder multiple x${bt.loo_ladder.multiple.curve_miss} -> curve x${bt.loo_ladder.curve.curve_miss} -> family x${bt.loo_ladder.family.curve_miss} -> full x${bt.loo.curve_miss} (flat x${bt.loo.flat_miss}, ${bt.loo.curve_within3}% within 3x vs ${bt.loo.flat_within3}%); time split x${bt.time_split.curve_miss} vs x${bt.time_split.flat_miss} flat; category holdout x${bt.holdout.curve_miss} vs x${bt.holdout.flat_miss} flat (${bt.holdout.curve_within3}% within 3x vs ${bt.holdout.flat_within3}%); fold rank correlation ${bt.fold_rank_corr}\n` +
+    `token radar: bootstrap band spans 2x or more for ${board.filter((r) => r.value_range_usd.high_usd >= 2 * r.value_range_usd.low_usd).length} of ${board.length} rows, 4x or more for ${board.filter((r) => r.value_range_usd.band_ratio >= 4).length}\n` +
+    `token radar: farm verdicts: ${radar.verdict_counts.farm} FARM / ${radar.verdict_counts.thin} THIN / ${radar.verdict_counts.skip} SKIP; best on the watchlist ${radar.best_per_hour[0]?.name ?? 'none'} at $${radar.best_per_hour[0]?.net_per_hour_usd ?? 0}/hour\n` +
+    `token radar: wrote ${join(out, 'board.json')}, ${join(out, 'data.js')}, ${join(out, 'dashboard')} (4 files), ${join(out, 'screenshots')} (${shots.length} images) and ${join(out, 'dossier.json')}\n`,
 );
